@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FastAPI backend s přímým napojením na ippi.io API
+FastAPI backend s přímým napojením na ippi.io API - POUZE SKUTEČNÁ DATA
 """
 
 import sys
@@ -159,7 +159,7 @@ def process_elasticsearch_data(raw_data):
     return processed
 
 def calculate_averages_and_yoy(data):
-    """Vypočítej průměry a YoY změny"""
+    """Vypočítej průměry a YoY změny ze skutečných dat"""
     if not data:
         return {}, {}
     
@@ -189,20 +189,41 @@ def calculate_averages_and_yoy(data):
             'avg': float(row['mean'])
         })
     
-    # Pro YoY - jednoduchá simulace (v reálném případě by se porovnávala s loňskými daty)
+    # Pro YoY - porovnej s loňskými daty
+    current_year = datetime.now().year
+    last_year = current_year - 1
+    
+    current_year_data = df_clean[df_clean['saleDate'].dt.year == current_year]
+    last_year_data = df_clean[df_clean['saleDate'].dt.year == last_year]
+    
     yoy_results = {}
-    for county, items in avg_results.items():
-        yoy_results[county] = []
-        for item in items:
-            # Simulace YoY změny na základě ceny (vyšší ceny = vyšší růst)
-            base_yoy = (item['avg'] / 300000) * 5  # Základní YoY podle ceny
-            yoy_change = base_yoy + (hash(f"{county}{item['beds']}") % 20 - 10)  # Přidej variabilitu
+    if not current_year_data.empty and not last_year_data.empty:
+        current_grouped = current_year_data.groupby(['county', 'beds'])['price'].mean().reset_index()
+        last_grouped = last_year_data.groupby(['county', 'beds'])['price'].mean().reset_index()
+        
+        for _, current_row in current_grouped.iterrows():
+            county = current_row['county']
+            beds = current_row['beds']
+            current_price = current_row['price']
             
-            yoy_results[county].append({
-                'county': county,
-                'beds': item['beds'],
-                'yoy': round(yoy_change, 1)
-            })
+            # Najdi odpovídající loňský záznam
+            last_row = last_grouped[
+                (last_grouped['county'] == county) & 
+                (last_grouped['beds'] == beds)
+            ]
+            
+            if not last_row.empty:
+                last_price = last_row.iloc[0]['price']
+                yoy_change = ((current_price - last_price) / last_price) * 100
+                
+                if county not in yoy_results:
+                    yoy_results[county] = []
+                
+                yoy_results[county].append({
+                    'county': county,
+                    'beds': int(beds),
+                    'yoy': round(yoy_change, 1)
+                })
     
     return avg_results, yoy_results
 
@@ -213,7 +234,7 @@ async def root():
         "message": "Property Market API s přímým napojením na ippi.io",
         "status": "OK",
         "timestamp": datetime.now().isoformat(),
-        "data_source": "ippi.io Elasticsearch"
+        "data_source": "ippi.io Elasticsearch - POUZE SKUTEČNÁ DATA"
     }
 
 @app.get("/api/pmx/all")
@@ -223,7 +244,7 @@ async def get_all_data(
     entity: str = Query("county", description="Entita (county/region/area)"),
     version: str = Query("avg", description="Verze (avg/yoy)")
 ):
-    """Získat všechna data podle entity a verze"""
+    """Získat všechna data podle entity a verze - POUZE SKUTEČNÁ DATA"""
     try:
         # Autentifikace
         auth_api_key(key=key, domain=domain)
@@ -261,7 +282,7 @@ async def get_all_data(
             return {"error": "Žádná data z ippi.io", "data": {}}
         
         processed_data = process_elasticsearch_data(raw_data)
-        print(f"✅ Zpracováno {len(processed_data)} záznamů")
+        print(f"✅ Zpracováno {len(processed_data)} skutečných záznamů")
         
         avg_results, yoy_results = calculate_averages_and_yoy(processed_data)
         
@@ -284,7 +305,7 @@ async def get_average_prices(
     region: str = Query(None),
     area: str = Query(None)
 ):
-    """Získat průměrné ceny"""
+    """Získat průměrné ceny - POUZE SKUTEČNÁ DATA"""
     try:
         auth_api_key(key=key, domain=domain)
         
@@ -317,7 +338,7 @@ async def get_yoy_changes(
     region: str = Query(None),
     area: str = Query(None)
 ):
-    """Získat year-over-year změny"""
+    """Získat year-over-year změny - POUZE SKUTEČNÁ DATA"""
     try:
         auth_api_key(key=key, domain=domain)
         
@@ -347,7 +368,7 @@ async def get_rent_data(
     domain: str = Query(...),
     version: str = Query("avg")
 ):
-    """Získat data o nájemním trhu"""
+    """Získat data o nájemním trhu - POUZE SKUTEČNÁ DATA"""
     try:
         auth_api_key(key=key, domain=domain)
         
@@ -356,7 +377,7 @@ async def get_rent_data(
         
         # Elasticsearch dotaz pro nájmy
         query = {
-            "_source": {"include": ["county", "price", "beds"]},
+            "_source": {"include": ["county", "price", "beds", "saleDate"]},
             "query": {
                 "bool": {
                     "must": [{"match": {"marketType": "Residential Rent"}}],
@@ -385,19 +406,47 @@ async def get_rent_data(
         
         # Seskup podle krajů a ložnic
         df = pd.DataFrame(processed_data)
-        grouped = df.groupby(['county', 'beds'])['price'].mean().reset_index()
         
-        result = []
-        for _, row in grouped.iterrows():
-            if version == "yoy":
-                # Simulace YoY pro nájmy
-                yoy_change = (hash(f"{row['county']}{row['beds']}rent") % 15) + 2
-                result.append({
-                    'county': row['county'],
-                    'beds': int(row['beds']),
-                    'avg_yoy': round(yoy_change, 1)
-                })
-            else:
+        if version == "yoy":
+            # Vypočítej YoY pro nájmy
+            df['saleDate'] = pd.to_datetime(df['saleDate'])
+            current_year = datetime.now().year
+            last_year = current_year - 1
+            
+            current_data = df[df['saleDate'].dt.year == current_year]
+            last_data = df[df['saleDate'].dt.year == last_year]
+            
+            if current_data.empty or last_data.empty:
+                return []
+            
+            current_grouped = current_data.groupby(['county', 'beds'])['price'].mean().reset_index()
+            last_grouped = last_data.groupby(['county', 'beds'])['price'].mean().reset_index()
+            
+            result = []
+            for _, current_row in current_grouped.iterrows():
+                county = current_row['county']
+                beds = current_row['beds']
+                current_price = current_row['price']
+                
+                last_row = last_grouped[
+                    (last_grouped['county'] == county) & 
+                    (last_grouped['beds'] == beds)
+                ]
+                
+                if not last_row.empty:
+                    last_price = last_row.iloc[0]['price']
+                    yoy_change = ((current_price - last_price) / last_price) * 100
+                    
+                    result.append({
+                        'county': county,
+                        'beds': int(beds),
+                        'avg_yoy': round(yoy_change, 1)
+                    })
+        else:
+            # Průměrné nájmy
+            grouped = df.groupby(['county', 'beds'])['price'].mean().reset_index()
+            result = []
+            for _, row in grouped.iterrows():
                 result.append({
                     'county': row['county'],
                     'beds': int(row['beds']),
@@ -417,7 +466,7 @@ async def get_property_details(
     domain: str = Query(...),
     area: str = Query("All")
 ):
-    """Získat detaily jednotlivých nemovitostí"""
+    """Získat detaily jednotlivých nemovitostí - POUZE SKUTEČNÁ DATA"""
     try:
         auth_api_key(key=key, domain=domain)
         
@@ -493,7 +542,8 @@ async def health_check():
             return {
                 "status": "healthy",
                 "timestamp": datetime.now().isoformat(),
-                "ippi_connection": "connected"
+                "ippi_connection": "connected",
+                "data_source": "ippi.io Elasticsearch - POUZE SKUTEČNÁ DATA"
             }
         else:
             return {
@@ -512,7 +562,7 @@ async def health_check():
 if __name__ == "__main__":
     print("🚀 Spouštím Property Market API s přímým napojením na ippi.io...")
     print("📡 API bude dostupné na: http://localhost:8000")
-    print("📊 Používá přímo ippi.io Elasticsearch")
+    print("📊 Používá přímo ippi.io Elasticsearch - POUZE SKUTEČNÁ DATA")
     print("🔑 Použij API klíč: test_api_key_123, domain: localhost")
     
     try:
