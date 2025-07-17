@@ -462,8 +462,8 @@ async def get_rent_data(
 
 @app.get("/api/eval/property")
 async def get_property_details(
-    key: str = Query(...),
-    domain: str = Query(...),
+    key: str = Query("test_api_key_123"),
+    domain: str = Query("localhost"),
     area: str = Query("All")
 ):
     """Získat detaily jednotlivých nemovitostí - POUZE SKUTEČNÁ DATA"""
