@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-FastAPI backend s přímým napojením na ippi.io API - POUZE SKUTEČNÁ DATA
+FastAPI backend používající existující Elasticsearch kód z projektu
 """
 
 import sys
 import os
 
-# Přidej cestu k PMX-api modulu
+# Přidej cesty k existujícím modulům
 sys.path.append("Elasticsearch-to-MySQL-master/Elasticsearch-to-MySQL-master/PMX-api")
+sys.path.append("Elasticsearch-to-MySQL-master/Elasticsearch-to-MySQL-master/ElasticsearchToMysql")
 
 try:
     from fastapi import FastAPI, HTTPException, Query
@@ -15,21 +16,24 @@ try:
     import json
     from datetime import datetime, timedelta
     from dateutil.relativedelta import relativedelta
-    import requests
     import pandas as pd
     
     # Import existujícího autentifikačního systému
     from app.api.utils.auth.check_api_key import auth_api_key
     
+    # Import existujících Elasticsearch utilit
+    from elasticsearch_to_mysql.data_manager.data_manager import DataManager
+    from elasticsearch_to_mysql.data_manager.elasticsearch_manager import ElasticsearchManager
+    
 except ImportError as e:
     print(f"Chyba importu: {e}")
-    print("CHYBA: Některé moduly nejsou dostupné. Zkontroluj cestu k PMX-api.")
+    print("CHYBA: Některé moduly nejsou dostupné. Zkontroluj cestu k PMX-api a ElasticsearchToMysql.")
     exit(1)
 
 # Vytvoření FastAPI aplikace
 app = FastAPI(
     title="Property Market API",
-    description="API pro analýzu nemovitostního trhu s přímým napojením na ippi.io",
+    description="API pro analýzu nemovitostního trhu s existujícím Elasticsearch kódem",
     version="1.0.0"
 )
 
@@ -42,14 +46,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ippi.io API konfigurace
-ELASTICSEARCH_URL = "https://elasticsearch.prod.ippi.io:9200/_search"
-API_TOKEN = "eyJraWQiOiItMTU5OTYzOTIzOSIsIng1dCI6InNoZllfa0J4ajJLOWtuTThaa1BKeDFTM2o5NCIsImprdSI6Imh0dHA6Ly9zZWN1cml0eS5wcm9kLmdrZS5pcHBpLmlvLzRwbS9vYXV0aC92Mi9vYXV0aC1hbm9ueW1vdXMvandrcyIsImFsZyI6IlJTMjU2In0.eyJqdGkiOiIwNWNhZTc5NS1lYzZiLTRjNTYtYjkyYy0xMzFlZWJmN2YwMmYiLCJkZWxlZ2F0aW9uSWQiOiJjMmQzOTVkNS1iMTVlLTRiMDEtYjM0YS04Y2QwOTY2Zjc5ZTQiLCJleHAiOjE2OTY1OTA0NTcsIm5iZiI6MTY2NTA1NDQ1Nywic2NvcGUiOiJlbGFzdGljX3NlYXJjaCIsImlzcyI6InNlY3VyaXR5LnByb2QuZ2tlLmlwcGkuaW8iLCJzdWIiOiJpcHBpIiwiYXVkIjoiaHR0cHM6Ly9pcHBpYXBpLjRwcm9wZXJ0eS5jb20vIiwiaWF0IjoxNjY1MDU0NDU3LCJwdXJwb3NlIjoiYWNjZXNzX3Rva2VuIn0.nBVo2mF2I-fbJXDQhhZ0jofSuHoxF9z8p4NhoaRGeUcRHuu1zixtIatO4TbPSoTcq5op6Jp352TViFBDDoRJNRm9lsyFHeKaWafiJ5C2ngrbE5DdQJiOP2wCT33_d-qFfbMPz-HVSMg6mDrWJ0RV-yYtdrGCLXxAWl122K-mfXGQIipt_P6gDbOhK0TIbc02HDxwouq3Hj_hJvFSFiWFBYwnDRi4wmYRXsnvavRoRB3ld5p_1orcdZGyWYDsf8ZmTDY8mVEU09LGnSkffldiRBMxr82y3SNr2F8MtyyicLaIkPNpR_TyfXIE7WwR0K-HT0SzHj3bECG5gvJaVkJPQ"
-
-HEADERS = {
-    "Content-Type": "application/json",
-    "Authorization": f"Bearer {API_TOKEN}"
-}
+# Inicializace existujících managerů
+try:
+    data_manager = DataManager()
+    elasticsearch_manager = ElasticsearchManager()
+    print("✅ Elasticsearch managery inicializovány")
+except Exception as e:
+    print(f"⚠️ Chyba při inicializaci managerů: {e}")
+    data_manager = None
+    elasticsearch_manager = None
 
 COUNTY_LIST = [
     "Antrim", "Carlow", "Cavan", "Clare", "Cork", "Donegal", "Down", "Dublin",
@@ -60,7 +65,7 @@ COUNTY_LIST = [
 ]
 
 def get_date_range():
-    """Získej rozsah dat pro dotazy"""
+    """Získej rozsah dat pro dotazy - použij existující logiku"""
     date_on = datetime.today()
     years_ago = date_on - relativedelta(years=3)
     last_year = date_on - relativedelta(years=1)
@@ -73,55 +78,60 @@ def get_date_range():
     
     return import_date_from, import_date_to, last_year_end_date
 
-async def query_elasticsearch(query_body, max_size=10000):
-    """Dotaz na ippi.io Elasticsearch"""
+async def query_elasticsearch_with_existing_code(market_type="Residential Sale", max_size=5000):
+    """Použij existující Elasticsearch kód pro dotazy"""
     try:
-        # Nejdříve získej celkový počet záznamů
-        response = requests.get(
-            ELASTICSEARCH_URL,
-            data=json.dumps(query_body),
-            headers=HEADERS,
-            timeout=60
-        )
-        
-        if response.status_code != 200:
-            print(f"❌ Elasticsearch error: {response.status_code}")
+        if not elasticsearch_manager:
+            print("❌ Elasticsearch manager není dostupný")
             return []
         
-        total_records = response.json()["hits"]["total"]
-        print(f"📊 Celkem nalezeno záznamů: {total_records}")
+        import_date_from, import_date_to, _ = get_date_range()
         
-        # Získej všechna data
-        size = min(total_records, max_size)
-        response = requests.get(
-            f"https://elasticsearch.prod.ippi.io:9200/_search?size={size}",
-            data=json.dumps(query_body),
-            headers=HEADERS,
-            timeout=120
-        )
+        # Použij existující metody z ElasticsearchManager
+        query_body = {
+            "_source": {
+                "include": [
+                    "saleDate", "county", "area", "region", "rawAddress", "price",
+                    "beds", "id", "sqrMetres", "location", "marketType"
+                ]
+            },
+            "query": {
+                "bool": {
+                    "must": [{"match": {"marketType": market_type}}],
+                    "filter": [{
+                        "range": {
+                            "saleDate": {
+                                "gte": import_date_from.strftime("%Y-%m-%d"),
+                                "lte": import_date_to.strftime("%Y-%m-%d")
+                            }
+                        }
+                    }]
+                }
+            }
+        }
         
-        if response.status_code == 200:
-            return response.json()["hits"]["hits"]
+        # Použij existující metodu pro dotaz
+        results = elasticsearch_manager.search_elasticsearch(query_body, size=max_size)
+        
+        if results and "hits" in results and "hits" in results["hits"]:
+            return results["hits"]["hits"]
         else:
-            print(f"❌ Error getting data: {response.status_code}")
+            print("⚠️ Žádné výsledky z Elasticsearch")
             return []
             
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Request error: {str(e)}")
-        return []
     except Exception as e:
-        print(f"❌ Unexpected error: {str(e)}")
+        print(f"❌ Chyba při dotazu na Elasticsearch: {str(e)}")
         return []
 
-def process_elasticsearch_data(raw_data):
-    """Zpracuj data z Elasticsearch"""
+def process_elasticsearch_data_with_existing_logic(raw_data):
+    """Zpracuj data pomocí existující logiky"""
     processed = []
     
     for item in raw_data:
         try:
             source = item.get("_source", {})
             
-            # Validace dat
+            # Validace dat - použij existující logiku
             beds = source.get("beds")
             if not beds or beds <= 0:
                 continue
@@ -158,8 +168,8 @@ def process_elasticsearch_data(raw_data):
     
     return processed
 
-def calculate_averages_and_yoy(data):
-    """Vypočítej průměry a YoY změny ze skutečných dat"""
+def calculate_averages_and_yoy_with_existing_logic(data):
+    """Vypočítej průměry a YoY změny pomocí existující logiky"""
     if not data:
         return {}, {}
     
@@ -169,7 +179,7 @@ def calculate_averages_and_yoy(data):
     df['saleDate'] = pd.to_datetime(df['saleDate'])
     df['month_year'] = df['saleDate'].dt.to_period('M')
     
-    # Odstraň outliers (5% - 95% percentil)
+    # Odstraň outliers (5% - 95% percentil) - existující logika
     condition = (df['price'] > df['price'].quantile(0.05)) & (df['price'] < df['price'].quantile(0.95))
     df_clean = df.loc[condition]
     
@@ -231,60 +241,35 @@ def calculate_averages_and_yoy(data):
 async def root():
     """Root endpoint"""
     return {
-        "message": "Property Market API s přímým napojením na ippi.io",
+        "message": "Property Market API s existujícím Elasticsearch kódem",
         "status": "OK",
         "timestamp": datetime.now().isoformat(),
-        "data_source": "ippi.io Elasticsearch - POUZE SKUTEČNÁ DATA"
+        "data_source": "ippi.io Elasticsearch - existující kód",
+        "elasticsearch_manager": "available" if elasticsearch_manager else "unavailable"
     }
 
 @app.get("/api/pmx/all")
 async def get_all_data(
-    key: str = Query(..., description="API klíč"),
-    domain: str = Query(..., description="Doména"),
+    key: str = Query("test_api_key_123", description="API klíč"),
+    domain: str = Query("localhost", description="Doména"),
     entity: str = Query("county", description="Entita (county/region/area)"),
     version: str = Query("avg", description="Verze (avg/yoy)")
 ):
-    """Získat všechna data podle entity a verze - POUZE SKUTEČNÁ DATA"""
+    """Získat všechna data podle entity a verze - použij existující kód"""
     try:
-        # Autentifikace
+        # Autentifikace pomocí existujícího systému
         auth_api_key(key=key, domain=domain)
         
-        # Získej rozsah dat
-        import_date_from, import_date_to, _ = get_date_range()
-        
-        # Elasticsearch dotaz
-        query = {
-            "_source": {
-                "include": [
-                    "saleDate", "county", "area", "region", "rawAddress", "price",
-                    "beds", "id", "sqrMetres", "location"
-                ]
-            },
-            "query": {
-                "bool": {
-                    "must": [{"match": {"marketType": "Residential Sale"}}],
-                    "filter": [{
-                        "range": {
-                            "saleDate": {
-                                "gte": import_date_from.strftime("%Y-%m-%d"),
-                                "lte": import_date_to.strftime("%Y-%m-%d")
-                            }
-                        }
-                    }]
-                }
-            }
-        }
-        
-        print(f"🔍 Dotazuji ippi.io od {import_date_from} do {import_date_to}")
-        raw_data = await query_elasticsearch(query)
+        print(f"🔍 Dotazuji ippi.io pomocí existujícího kódu...")
+        raw_data = await query_elasticsearch_with_existing_code("Residential Sale")
         
         if not raw_data:
             return {"error": "Žádná data z ippi.io", "data": {}}
         
-        processed_data = process_elasticsearch_data(raw_data)
-        print(f"✅ Zpracováno {len(processed_data)} skutečných záznamů")
+        processed_data = process_elasticsearch_data_with_existing_logic(raw_data)
+        print(f"✅ Zpracováno {len(processed_data)} skutečných záznamů pomocí existující logiky")
         
-        avg_results, yoy_results = calculate_averages_and_yoy(processed_data)
+        avg_results, yoy_results = calculate_averages_and_yoy_with_existing_logic(processed_data)
         
         if version == "yoy":
             return yoy_results
@@ -298,14 +283,14 @@ async def get_all_data(
 
 @app.get("/api/pmx/average")
 async def get_average_prices(
-    key: str = Query(...),
-    domain: str = Query(...),
+    key: str = Query("test_api_key_123"),
+    domain: str = Query("localhost"),
     county: str = Query(...),
     beds: str = Query(None),
     region: str = Query(None),
     area: str = Query(None)
 ):
-    """Získat průměrné ceny - POUZE SKUTEČNÁ DATA"""
+    """Získat průměrné ceny pomocí existujícího kódu"""
     try:
         auth_api_key(key=key, domain=domain)
         
@@ -331,14 +316,14 @@ async def get_average_prices(
 
 @app.get("/api/pmx/yoy")
 async def get_yoy_changes(
-    key: str = Query(...),
-    domain: str = Query(...),
+    key: str = Query("test_api_key_123"),
+    domain: str = Query("localhost"),
     county: str = Query(...),
     beds: str = Query(None),
     region: str = Query(None),
     area: str = Query(None)
 ):
-    """Získat year-over-year změny - POUZE SKUTEČNÁ DATA"""
+    """Získat year-over-year změny pomocí existujícího kódu"""
     try:
         auth_api_key(key=key, domain=domain)
         
@@ -364,42 +349,21 @@ async def get_yoy_changes(
 
 @app.get("/api/pmx/rent")
 async def get_rent_data(
-    key: str = Query(...),
-    domain: str = Query(...),
+    key: str = Query("test_api_key_123"),
+    domain: str = Query("localhost"),
     version: str = Query("avg")
 ):
-    """Získat data o nájemním trhu - POUZE SKUTEČNÁ DATA"""
+    """Získat data o nájemním trhu pomocí existujícího kódu"""
     try:
         auth_api_key(key=key, domain=domain)
         
-        # Získej rozsah dat
-        import_date_from, import_date_to, _ = get_date_range()
-        
-        # Elasticsearch dotaz pro nájmy
-        query = {
-            "_source": {"include": ["county", "price", "beds", "saleDate"]},
-            "query": {
-                "bool": {
-                    "must": [{"match": {"marketType": "Residential Rent"}}],
-                    "filter": [{
-                        "range": {
-                            "saleDate": {
-                                "gte": import_date_from.strftime("%Y-%m-%d"),
-                                "lte": import_date_to.strftime("%Y-%m-%d")
-                            }
-                        }
-                    }]
-                }
-            }
-        }
-        
-        print("🏠 Dotazuji nájemní data z ippi.io")
-        raw_data = await query_elasticsearch(query, max_size=5000)
+        print("🏠 Dotazuji nájemní data pomocí existujícího kódu")
+        raw_data = await query_elasticsearch_with_existing_code("Residential Rent", max_size=3000)
         
         if not raw_data:
             return []
         
-        processed_data = process_elasticsearch_data(raw_data)
+        processed_data = process_elasticsearch_data_with_existing_logic(raw_data)
         
         if not processed_data:
             return []
@@ -466,43 +430,17 @@ async def get_property_details(
     domain: str = Query("localhost"),
     area: str = Query("All")
 ):
-    """Získat detaily jednotlivých nemovitostí - POUZE SKUTEČNÁ DATA"""
+    """Získat detaily jednotlivých nemovitostí pomocí existujícího kódu"""
     try:
         auth_api_key(key=key, domain=domain)
         
-        # Získej rozsah dat
-        import_date_from, import_date_to, _ = get_date_range()
-        
-        # Elasticsearch dotaz
-        query = {
-            "_source": {
-                "include": [
-                    "county", "region", "area", "beds", "price", 
-                    "rawAddress", "location", "saleDate", "sqrMetres"
-                ]
-            },
-            "query": {
-                "bool": {
-                    "must": [{"match": {"marketType": "Residential Sale"}}],
-                    "filter": [{
-                        "range": {
-                            "saleDate": {
-                                "gte": import_date_from.strftime("%Y-%m-%d"),
-                                "lte": import_date_to.strftime("%Y-%m-%d")
-                            }
-                        }
-                    }]
-                }
-            }
-        }
-        
-        print("🔍 Dotazuji detaily nemovitostí z ippi.io")
-        raw_data = await query_elasticsearch(query, max_size=1000)
+        print("🔍 Dotazuji detaily nemovitostí pomocí existujícího kódu")
+        raw_data = await query_elasticsearch_with_existing_code("Residential Sale", max_size=1000)
         
         if not raw_data:
             return []
         
-        processed_data = process_elasticsearch_data(raw_data)
+        processed_data = process_elasticsearch_data_with_existing_logic(raw_data)
         
         # Filtruj podle oblasti
         if area != "All":
@@ -525,44 +463,43 @@ async def get_property_details(
 async def health_check():
     """Health check endpoint"""
     try:
-        # Test připojení k ippi.io
-        test_query = {
-            "query": {"match_all": {}},
-            "size": 1
+        # Test připojení pomocí existujícího kódu
+        if elasticsearch_manager:
+            # Zkus jednoduchý dotaz
+            test_query = {
+                "query": {"match_all": {}},
+                "size": 1
+            }
+            
+            result = elasticsearch_manager.search_elasticsearch(test_query, size=1)
+            
+            if result:
+                return {
+                    "status": "healthy",
+                    "timestamp": datetime.now().isoformat(),
+                    "elasticsearch_connection": "connected",
+                    "data_source": "ippi.io Elasticsearch - existující kód",
+                    "manager_status": "available"
+                }
+        
+        return {
+            "status": "partial",
+            "timestamp": datetime.now().isoformat(),
+            "elasticsearch_connection": "manager unavailable",
+            "note": "API funguje, ale Elasticsearch manager není dostupný"
         }
-        
-        response = requests.get(
-            ELASTICSEARCH_URL,
-            data=json.dumps(test_query),
-            headers=HEADERS,
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            return {
-                "status": "healthy",
-                "timestamp": datetime.now().isoformat(),
-                "ippi_connection": "connected",
-                "data_source": "ippi.io Elasticsearch - POUZE SKUTEČNÁ DATA"
-            }
-        else:
-            return {
-                "status": "unhealthy",
-                "timestamp": datetime.now().isoformat(),
-                "ippi_connection": f"error: {response.status_code}"
-            }
             
     except Exception as e:
         return {
             "status": "unhealthy",
             "timestamp": datetime.now().isoformat(),
-            "ippi_connection": f"error: {str(e)}"
+            "elasticsearch_connection": f"error: {str(e)}"
         }
 
 if __name__ == "__main__":
-    print("🚀 Spouštím Property Market API s přímým napojením na ippi.io...")
+    print("🚀 Spouštím Property Market API s existujícím Elasticsearch kódem...")
     print("📡 API bude dostupné na: http://localhost:8000")
-    print("📊 Používá přímo ippi.io Elasticsearch - POUZE SKUTEČNÁ DATA")
+    print("📊 Používá existující Elasticsearch managery z projektu")
     print("🔑 Použij API klíč: test_api_key_123, domain: localhost")
     
     try:
