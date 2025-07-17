@@ -28,12 +28,12 @@ interface ApiProviderProps {
 
 export const ApiProvider: React.FC<ApiProviderProps> = ({ children }) => {
   const [config, setConfig] = useState<ApiConfig>({
-    apiKey: '',
-    domain: '',
-    baseUrl: ''
+    apiKey: 'not-needed',
+    domain: 'not-needed', 
+    baseUrl: 'http://localhost:8000'
   });
 
-  const isConfigured = config.apiKey && config.domain;
+  const isConfigured = true; // Always configured now
 
   return (
     <ApiContext.Provider value={{ config, setConfig, isConfigured }}>
