@@ -1,28 +1,44 @@
 #!/usr/bin/env python3
 """
-Jednoduchý FastAPI backend optimalizovaný pro WebContainer
+FastAPI backend s použitím existujícího autentifikačního a databázového systému
 """
 
-# Základní importy bez subprocess
+import sys
+import os
+
+# Přidej cestu k PMX-api modulu
+sys.path.append("Elasticsearch-to-MySQL-master/Elasticsearch-to-MySQL-master/PMX-api")
+
 try:
     from fastapi import FastAPI, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
     import json
     from datetime import datetime
-    import os
+    
+    # Import existujících modulů z projektu
+    from app.api.utils.auth.check_api_key import auth_api_key
+    from db.database_connection import DatabaseConnection
+    from db.queries.queries import querying
+    from db.models.current_year_county import CurrentYearCounty
+    from db.models.current_year_region import CurrentYearRegion
+    from db.models.current_year_area import CurrentYearArea
+    from db.models.pmx_yoy import CountyYoY
+    from db.models.pmx_yoy_region import PMXYoYRegion
+    from db.models.pmx_yoy_area import PMXYoYArea
+    from db.models.rent_avg import rent_avg
+    from db.models.rent_yoy import RentYoy
+    from db.models.property import addressData
+    from sqlalchemy import select, and_
+    
 except ImportError as e:
     print(f"Chyba importu: {e}")
-    print("CHYBA: Chybí závislosti. Spusťte nejdříve: python setup_complete.py")
+    print("CHYBA: Některé moduly nejsou dostupné. Zkontroluj cestu k PMX-api.")
     exit(1)
-    from fastapi import FastAPI, HTTPException, Query
-    from fastapi.middleware.cors import CORSMiddleware
-    import json
-    from datetime import datetime
 
 # Vytvoření FastAPI aplikace
 app = FastAPI(
     title="Property Market API",
-    description="API pro analýzu nemovitostního trhu",
+    description="API pro analýzu nemovitostního trhu s databází",
     version="1.0.0"
 )
 
@@ -35,186 +51,329 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Globální proměnné pro cache
-cache = {}
-cache_timeout = 300  # 5 minut
-
-def get_from_api(url, params=None):
-    """Bezpečné volání API s error handlingem"""
-    try:
-        import requests
-        response = requests.get(url, params=params, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"API error: {response.status_code}")
-            return None
-    except Exception as e:
-        print(f"Request error: {e}")
-        return None
-
 @app.get("/")
 async def root():
     """Root endpoint"""
     return {
-        "message": "Property Market API je spuštěno",
+        "message": "Property Market API s databází je spuštěno",
         "status": "OK",
         "timestamp": datetime.now().isoformat(),
-        "endpoints": {
-            "all_data": "/api/pmx/all",
-            "averages": "/api/pmx/average",
-            "yoy_changes": "/api/pmx/yoy", 
-            "rent_data": "/api/pmx/rent",
-            "properties": "/api/eval/property"
-        }
+        "database": "MySQL PMX Report"
     }
 
 @app.get("/api/pmx/all")
-async def get_all_data(entity: str = "county", version: str = "avg"):
-    """Získat všechna data"""
+async def get_all_data(
+    key: str = Query(..., description="API klíč"),
+    domain: str = Query(..., description="Doména"),
+    entity: str = Query("county", description="Entita (county/region/area)"),
+    version: str = Query("avg", description="Verze (avg/yoy)")
+):
+    """Získat všechna data podle entity a verze"""
     try:
-        # Cache klíč
-        cache_key = f"all_{entity}_{version}"
+        # Autentifikace
+        auth_api_key(key=key, domain=domain)
         
-        # Kontrola cache
-        if cache_key in cache:
-            cached_time, data = cache[cache_key]
-            if (datetime.now() - cached_time).seconds < cache_timeout:
-                return data
+        # Mapování tabulek
+        VERSION_TABLE_MAP = {
+            "county": {
+                "yoy": CountyYoY,
+                "avg": CurrentYearCounty,
+                "columns": ["index", "county", "beds"],
+            },
+            "region": {
+                "yoy": PMXYoYRegion,
+                "avg": CurrentYearRegion,
+                "columns": ["index", "region", "beds", "county"],
+            },
+            "area": {
+                "yoy": PMXYoYArea,
+                "avg": CurrentYearArea,
+                "columns": ["index", "area", "beds", "county", "region"],
+            },
+        }
         
-        # Volání API
-        base_url = "https://ippi.io/api/pmx/all"
-        params = {"entity": entity, "version": version}
+        if entity not in VERSION_TABLE_MAP:
+            raise HTTPException(status_code=400, detail="Entity musí být 'county', 'region' nebo 'area'")
         
-        data = get_from_api(base_url, params)
+        entity_map = VERSION_TABLE_MAP[entity]
         
-        if data:
-            # Uložení do cache
-            cache[cache_key] = (datetime.now(), data)
-            return data
-        else:
-            return {"error": "Nepodařilo se načíst data z API", "data": {}}
-            
+        if version not in entity_map:
+            raise HTTPException(status_code=400, detail="Version musí být 'yoy' nebo 'avg'")
+        
+        # Přidej správný sloupec pro data
+        columns = entity_map["columns"].copy()
+        columns.append(version if version == "yoy" else "avg")
+        
+        entity_dict = {
+            "query": select(entity_map[version]),
+            "columns": columns,
+        }
+        
+        # Dotaz do databáze
+        query_handler = querying()
+        result = query_handler.general_query(entity_dict)
+        
+        # Parsuj JSON výsledek
+        import pandas as pd
+        df = pd.read_json(result, orient="index")
+        
+        # Seskup podle entity
+        output = {}
+        entity_column = entity if entity != "avg" else "county"
+        
+        for entity_name in df[entity_column].unique():
+            temp_df = df.loc[df[entity_column] == entity_name]
+            entities_dict = temp_df.to_dict(orient="records")
+            output[entity_name] = entities_dict
+        
+        return output
+        
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": f"Chyba při načítání dat: {str(e)}", "data": {}}
 
 @app.get("/api/pmx/average")
-async def get_average_prices(county: str, beds: str = None):
-    """Získat průměrné ceny pro konkrétní kraj"""
+async def get_average_prices(
+    key: str = Query(...),
+    domain: str = Query(...),
+    county: str = Query(...),
+    beds: str = Query(None),
+    region: str = Query(None),
+    area: str = Query(None)
+):
+    """Získat průměrné ceny"""
     try:
-        cache_key = f"avg_{county}_{beds}"
+        auth_api_key(key=key, domain=domain)
         
-        if cache_key in cache:
-            cached_time, data = cache[cache_key]
-            if (datetime.now() - cached_time).seconds < cache_timeout:
-                return data
+        beds_list = [1, 2, 3, 4, 5, 6] if beds is None else [int(b) for b in beds.split(",")]
         
-        base_url = "https://ippi.io/api/pmx/average"
-        params = {"county": county}
-        if beds:
-            params["beds"] = beds
-            
-        data = get_from_api(base_url, params)
-        
-        if data:
-            cache[cache_key] = (datetime.now(), data)
-            return data
+        # Určit kterou tabulku použít
+        if region and area:
+            query = select(CurrentYearArea).where(
+                and_(
+                    CurrentYearArea.beds.in_(beds_list),
+                    CurrentYearArea.region == region,
+                    CurrentYearArea.area == area,
+                    CurrentYearArea.county == county
+                )
+            )
+            columns = ["region", "area", "beds", "avg", "county"]
+        elif region:
+            query = select(CurrentYearRegion).where(
+                and_(
+                    CurrentYearRegion.beds.in_(beds_list),
+                    CurrentYearRegion.region == region,
+                    CurrentYearRegion.county == county
+                )
+            )
+            columns = ["region", "beds", "avg", "county"]
+        elif area:
+            query = select(CurrentYearArea).where(
+                and_(
+                    CurrentYearArea.beds.in_(beds_list),
+                    CurrentYearArea.area == area,
+                    CurrentYearArea.county == county
+                )
+            )
+            columns = ["area", "beds", "avg", "county"]
         else:
-            return []
+            query = select(CurrentYearCounty).where(
+                and_(
+                    CurrentYearCounty.beds.in_(beds_list),
+                    CurrentYearCounty.county == county
+                )
+            )
+            columns = ["county", "beds", "avg"]
+        
+        entity_dict = {"query": query, "columns": columns}
+        
+        query_handler = querying()
+        result = query_handler.general_query(entity_dict)
+        
+        try:
+            response = json.loads(result)
+            return response
+        except (TypeError, json.JSONDecodeError):
+            return {}
             
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": f"Chyba při načítání průměrných cen: {str(e)}"}
 
 @app.get("/api/pmx/yoy")
-async def get_yoy_changes(county: str, beds: str = None):
+async def get_yoy_changes(
+    key: str = Query(...),
+    domain: str = Query(...),
+    county: str = Query(...),
+    beds: str = Query(None),
+    region: str = Query(None),
+    area: str = Query(None)
+):
     """Získat year-over-year změny"""
     try:
-        cache_key = f"yoy_{county}_{beds}"
+        auth_api_key(key=key, domain=domain)
         
-        if cache_key in cache:
-            cached_time, data = cache[cache_key]
-            if (datetime.now() - cached_time).seconds < cache_timeout:
-                return data
+        beds_list = [1, 2, 3, 4, 5, 6] if beds is None else [int(b) for b in beds.split(",")]
         
-        base_url = "https://ippi.io/api/pmx/yoy"
-        params = {"county": county}
-        if beds:
-            params["beds"] = beds
-            
-        data = get_from_api(base_url, params)
-        
-        if data:
-            cache[cache_key] = (datetime.now(), data)
-            return data
+        # Určit kterou tabulku použít
+        if region and area:
+            query = select(PMXYoYArea).where(
+                and_(
+                    PMXYoYArea.beds.in_(beds_list),
+                    PMXYoYArea.region == region,
+                    PMXYoYArea.area == area,
+                    PMXYoYArea.county == county
+                )
+            )
+            columns = ["region", "area", "beds", "yoy", "county"]
+        elif region:
+            query = select(PMXYoYRegion).where(
+                and_(
+                    PMXYoYRegion.beds.in_(beds_list),
+                    PMXYoYRegion.region == region,
+                    PMXYoYRegion.county == county
+                )
+            )
+            columns = ["region", "beds", "yoy", "county"]
+        elif area:
+            query = select(PMXYoYArea).where(
+                and_(
+                    PMXYoYArea.beds.in_(beds_list),
+                    PMXYoYArea.area == area,
+                    PMXYoYArea.county == county
+                )
+            )
+            columns = ["area", "beds", "yoy", "county"]
         else:
-            return []
+            query = select(CountyYoY).where(
+                and_(
+                    CountyYoY.beds.in_(beds_list),
+                    CountyYoY.county == county
+                )
+            )
+            columns = ["county", "beds", "yoy"]
+        
+        entity_dict = {"query": query, "columns": columns}
+        
+        query_handler = querying()
+        result = query_handler.general_query(entity_dict)
+        
+        try:
+            response = json.loads(result)
+            return response
+        except (TypeError, json.JSONDecodeError):
+            return {}
             
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": f"Chyba při načítání YoY dat: {str(e)}"}
 
 @app.get("/api/pmx/rent")
-async def get_rent_data(version: str = "avg"):
+async def get_rent_data(
+    key: str = Query(...),
+    domain: str = Query(...),
+    version: str = Query("avg")
+):
     """Získat data o nájemním trhu"""
     try:
-        cache_key = f"rent_{version}"
+        auth_api_key(key=key, domain=domain)
         
-        if cache_key in cache:
-            cached_time, data = cache[cache_key]
-            if (datetime.now() - cached_time).seconds < cache_timeout:
-                return data
-        
-        base_url = "https://ippi.io/api/pmx/rent"
-        params = {"version": version}
-        
-        data = get_from_api(base_url, params)
-        
-        if data:
-            cache[cache_key] = (datetime.now(), data)
-            return data
+        if version == "yoy":
+            query = select(RentYoy)
+            columns = ["index", "county", "beds", "avg_yoy"]
+        elif version == "avg":
+            query = select(rent_avg)
+            columns = ["index", "county", "beds", "avg"]
         else:
-            return []
+            raise HTTPException(status_code=400, detail="Version musí být 'avg' nebo 'yoy'")
+        
+        entity_dict = {"query": query, "columns": columns}
+        
+        query_handler = querying()
+        result = query_handler.general_query(entity_dict)
+        
+        try:
+            response = json.loads(result)
+            return response
+        except (TypeError, json.JSONDecodeError):
+            return {}
             
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": f"Chyba při načítání rent dat: {str(e)}"}
 
 @app.get("/api/eval/property")
-async def get_property_details(area: str = "All"):
+async def get_property_details(
+    key: str = Query(...),
+    domain: str = Query(...),
+    area: str = Query("All")
+):
     """Získat detaily jednotlivých nemovitostí"""
     try:
-        cache_key = f"property_{area}"
+        auth_api_key(key=key, domain=domain)
         
-        if cache_key in cache:
-            cached_time, data = cache[cache_key]
-            if (datetime.now() - cached_time).seconds < cache_timeout:
-                return data
+        entity_dict = {
+            "query": select(addressData),
+            "columns": [
+                "county", "region", "area", "beds", "price", 
+                "rawAddress", "location", "saleDate", "sqrMetres"
+            ],
+        }
         
-        base_url = "https://ippi.io/api/eval/property"
-        params = {"area": area}
+        query_handler = querying()
+        df = query_handler.general_query(entity_dict, return_type=pd.DataFrame)
         
-        data = get_from_api(base_url, params)
-        
-        if data:
-            cache[cache_key] = (datetime.now(), data)
-            return data
+        if area != "All":
+            response_df = df[
+                (df["county"] == area) | (df["region"] == area) | (df["area"] == area)
+            ]
         else:
-            return []
-            
+            response_df = df
+        
+        # Resetuj index
+        new_index = [i for i in range(len(response_df.index))]
+        response_df.index = new_index
+        
+        response_raw = response_df[entity_dict["columns"]].to_json(orient="index")
+        response = json.loads(response_raw)
+        
+        return response
+        
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": f"Chyba při načítání property dat: {str(e)}"}
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "cache_size": len(cache)
-    }
+    try:
+        # Test databázového připojení
+        query_handler = querying()
+        test_query = {"query": select(CurrentYearCounty).limit(1), "columns": ["county"]}
+        query_handler.general_query(test_query)
+        
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "database": "connected"
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "timestamp": datetime.now().isoformat(),
+            "database": f"error: {str(e)}"
+        }
 
 if __name__ == "__main__":
-    print("🚀 Spouštím Property Market API...")
+    print("🚀 Spouštím Property Market API s databází...")
     print("📡 API bude dostupné na: http://localhost:8000")
-    print("📊 Frontend běží na: http://localhost:5173")
+    print("📊 Používá MySQL databázi PMX Report")
+    print("🔑 Použij API klíč: test_api_key_123, domain: localhost")
     
     try:
         import uvicorn
@@ -226,5 +385,5 @@ if __name__ == "__main__":
             access_log=False
         )
     except ImportError:
-        print("❌ Uvicorn není nainstalován. Spusťte nejdříve: python setup_complete.py")
+        print("❌ Uvicorn není nainstalován.")
         exit(1)
