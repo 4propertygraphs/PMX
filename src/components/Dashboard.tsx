@@ -5,7 +5,7 @@ import Overview from './Overview';
 import CountyAnalysis from './CountyAnalysis';
 import RentAnalysis from './RentAnalysis';
 import PropertySearch from './PropertySearch';
-import { BarChart3, Home, Search, TrendingUp } from 'lucide-react';
+import { BarChart3, Home, Search, TrendingUp, Building2 } from 'lucide-react';
 
 const Dashboard: React.FC = () => {
   const { isConfigured } = useApi();
@@ -27,9 +27,14 @@ const Dashboard: React.FC = () => {
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-6">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Property Market Dashboard</h1>
-              <p className="text-gray-600 mt-1">Irish Property Data Analytics</p>
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-blue-100 rounded-lg">
+                <Building2 className="h-8 w-8 text-blue-600" />
+              </div>
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">Property Market Dashboard</h1>
+                <p className="text-gray-600 mt-1">Irish Property Data Analytics</p>
+              </div>
             </div>
           </div>
         </div>
