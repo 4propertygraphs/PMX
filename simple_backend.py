@@ -12,9 +12,8 @@ try:
     import os
 except ImportError as e:
     print(f"Chyba importu: {e}")
-    print("Instaluji závislosti...")
-    # Fallback bez subprocess
-    os.system("python -m pip install fastapi uvicorn requests --quiet")
+    print("CHYBA: Chybí závislosti. Spusťte nejdříve: python setup_complete.py")
+    exit(1)
     from fastapi import FastAPI, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
     import json
@@ -227,7 +226,5 @@ if __name__ == "__main__":
             access_log=False
         )
     except ImportError:
-        print("❌ Uvicorn není nainstalován")
-        os.system("python -m pip install uvicorn")
-        import uvicorn
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        print("❌ Uvicorn není nainstalován. Spusťte nejdříve: python setup_complete.py")
+        exit(1)
