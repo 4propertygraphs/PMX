@@ -1,0 +1,22 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pandas = "*"
+matplotlib = "*"
+elasticsearch = "~=6.8.2"
+mysql-connector-python = "*"
+mysql = "*"
+pymysql = "*"
+sqlalchemy = "*"
+geopy = "*"
+openpyxl = "*"
+autopep8 = "*"
+requests = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.12t"
