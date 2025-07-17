@@ -30,7 +30,7 @@ export const ApiProvider: React.FC<ApiProviderProps> = ({ children }) => {
   const [config, setConfig] = useState<ApiConfig>({
     apiKey: '',
     domain: '',
-    baseUrl: 'http://localhost:8000'
+    baseUrl: ''
   });
 
   const isConfigured = config.apiKey && config.domain;
