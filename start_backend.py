@@ -4,6 +4,35 @@ Start the FastAPI backend server
 """
 import subprocess
 import sys
+
+def install_dependencies():
+    """Install required dependencies for FastAPI backend"""
+    dependencies = [
+        'fastapi',
+        'uvicorn',
+        'sqlalchemy',
+        'pymysql',
+        'pandas',
+        'python-multipart'
+    ]
+    
+    for dep in dependencies:
+        try:
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', dep])
+            print(f"✅ Installed {dep}")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Failed to install {dep}: {e}")
+            return False
+    return True
+
+# Install dependencies first
+print("📦 Installing required dependencies...")
+if not install_dependencies():
+    print("❌ Failed to install dependencies. Exiting.")
+    sys.exit(1)
+
+import subprocess
+import sys
 import os
 
 def start_backend():
